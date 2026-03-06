@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bayesian-router"
+version = "0.1.0"
+description = "Autonomous LLM model routing with Thompson Sampling — cut API costs 40-70 % with <1 % accuracy drop"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{ name = "Shrinidhi Mahishi" }]
+keywords = ["llm", "routing", "bayesian", "thompson-sampling", "cost-optimization"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = ["numpy"]
+
+[project.optional-dependencies]
+demo = ["streamlit", "plotly", "scipy", "pandas"]
+dev  = ["pytest"]
+all  = ["streamlit", "plotly", "scipy", "pandas", "pytest"]
+
+[project.urls]
+Repository = "https://github.com/shrinidhi-mahishi/bayesian-router"
+
+[tool.setuptools.packages.find]
+include = ["bayesian_router*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
