@@ -54,8 +54,18 @@ class ModelSimulator:
     def call(self, model: str, tokens: int = 500) -> dict:
         """Simulate an LLM call.
 
-        Returns a dict with keys: ``latency_ms``, ``is_valid``, ``retried``,
-        ``cost``, ``tokens``.
+        Returns a dict with keys:
+
+        - ``latency_ms``
+        - ``validity_score``   (float in [0.0, 1.0])
+        - ``retry_count``      (integer)
+        - ``cost``
+        - ``tokens``
+
+        For backward compatibility with older examples, it also returns:
+
+        - ``is_valid``   (bool alias for ``validity_score == 1.0``)
+        - ``retried``    (bool alias for ``retry_count > 0``)
         """
         p = self.profiles[model]
         deg = self._degradation.get(model, 1.0)
@@ -65,13 +75,17 @@ class ModelSimulator:
 
         validity = min(p.base_validity / deg, 1.0)
         is_valid = random.random() < validity
+        validity_score = 1.0 if is_valid else 0.0
 
         retry_rate = min(p.retry_rate * deg, 1.0)
         retried = random.random() < retry_rate
+        retry_count = 1 if retried else 0
 
         cost = (tokens / 1000) * p.cost_per_1k
         return dict(
             latency_ms=latency,
+            validity_score=validity_score,
+            retry_count=retry_count,
             is_valid=is_valid,
             retried=retried,
             cost=cost,

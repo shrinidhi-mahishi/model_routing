@@ -8,7 +8,7 @@ Run:
 import math
 import random
 from dataclasses import dataclass, field
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -60,6 +60,7 @@ def _l(m: str) -> str:
 class StepRecord:
     query_id: int
     model_selected: str
+    shadow_model: Optional[str]
     reward: float
     validity_r: float
     latency_r: float
@@ -68,6 +69,7 @@ class StepRecord:
     is_valid: bool
     retried: bool
     cost: float
+    shadow_cost: float
     baseline_cost: float
     fallback_used: bool
     alphas: Dict[str, float] = field(default_factory=dict)
@@ -99,15 +101,26 @@ def run_simulation(
         reward = router.update(
             result.model,
             latency_ms=t["latency_ms"],
-            is_valid=t["is_valid"],
-            retried=t["retried"],
+            validity_score=t["validity_score"],
+            retry_count=t["retry_count"],
         )
+        shadow_cost = 0.0
+        if result.shadow_model:
+            shadow_t = sim.call(result.shadow_model)
+            router.update_shadow(
+                result.shadow_model,
+                latency_ms=shadow_t["latency_ms"],
+                validity_score=shadow_t["validity_score"],
+                retry_count=shadow_t["retry_count"],
+            )
+            shadow_cost = shadow_t["cost"]
         state = router.get_distributions()
 
         history.append(
             StepRecord(
                 query_id=i,
                 model_selected=result.model,
+                shadow_model=result.shadow_model,
                 reward=reward.total,
                 validity_r=reward.validity,
                 latency_r=reward.latency,
@@ -115,7 +128,8 @@ def run_simulation(
                 latency_ms=t["latency_ms"],
                 is_valid=t["is_valid"],
                 retried=t["retried"],
-                cost=t["cost"],
+                cost=t["cost"] + shadow_cost,
+                shadow_cost=shadow_cost,
                 baseline_cost=(t["tokens"] / 1000) * baseline_rate,
                 fallback_used=result.fallback_used,
                 alphas={m: s.alpha for m, s in state.items()},

@@ -1,6 +1,7 @@
 """Data models for the bayesian_router package."""
 
 from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass
@@ -24,6 +25,8 @@ class RoutingResult:
 
     model: str
     fallback_used: bool = False
+    shadow_model: Optional[str] = None
+    selection_reason: str = "thompson"
 
 
 @dataclass
@@ -44,3 +47,6 @@ class ModelState:
     beta: float
     confidence: float
     selections: int
+    shadow_selections: int = 0
+    circuit_state: str = "closed"
+    recent_failures: int = 0

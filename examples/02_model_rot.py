@@ -23,9 +23,17 @@ def main():
         router.update(
             result.model,
             latency_ms=t["latency_ms"],
-            is_valid=t["is_valid"],
-            retried=t["retried"],
+            validity_score=t["validity_score"],
+            retry_count=t["retry_count"],
         )
+        if result.shadow_model:
+            shadow_t = sim.call(result.shadow_model)
+            router.update_shadow(
+                result.shadow_model,
+                latency_ms=shadow_t["latency_ms"],
+                validity_score=shadow_t["validity_score"],
+                retry_count=shadow_t["retry_count"],
+            )
     print(f"  Traffic share:  {_share_str(router)}")
 
     sim.degrade("claude-haiku", factor=3.0)
@@ -41,6 +49,14 @@ def main():
             is_valid=t["is_valid"],
             retried=t["retried"],
         )
+        if result.shadow_model:
+            shadow_t = sim.call(result.shadow_model)
+            router.update_shadow(
+                result.shadow_model,
+                latency_ms=shadow_t["latency_ms"],
+                is_valid=shadow_t["is_valid"],
+                retried=shadow_t["retried"],
+            )
     print(f"  Traffic share:  {_share_str(router)}")
     print("\n  Router adapted — traffic shifted away from degraded model.")
 

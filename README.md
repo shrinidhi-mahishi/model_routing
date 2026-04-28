@@ -7,8 +7,8 @@ Autonomous LLM model routing with Thompson Sampling — cut API costs by 40-70% 
 * **Label-free learning** — Composite reward from 3 objective signals (validity, latency, no-retry), zero human labels
 * **Model rot adaptation** — Decaying memory detects provider degradation and reroutes automatically
 * **Cold-start solution** — Expert priors from benchmarks converge in ~20 queries instead of 100
-* **Safety guarantees** — Circuit breaker falls back to trusted model when confidence drops
-* **Shadow evaluation** — Continuous exploration on a fraction of traffic
+* **Safety guarantees** — Confidence fallback plus automated circuit-breaker states
+* **Shadow evaluation** — Mirror 5% of traffic to a hidden candidate model
 * **Framework-agnostic** — Works with any LLM API (OpenAI, Anthropic, Google, local models)
 
 ## Installation
@@ -45,6 +45,15 @@ reward = router.update(
     retried=False,
 )
 print(f"Reward: {reward.total:.2f}")
+
+# Optional: mirror a hidden candidate model on shadow traffic
+if result.shadow_model:
+    router.update_shadow(
+        result.shadow_model,
+        latency_ms=520,
+        is_valid=True,
+        retried=False,
+    )
 ```
 
 ## With Any LLM
@@ -73,6 +82,18 @@ router.update(
     is_valid=True,
     retried=False,
 )
+
+if result.shadow_model:
+    shadow = client.chat.completions.create(
+        model=result.shadow_model,
+        messages=[{"role": "user", "content": "Hello"}],
+    )
+    router.update_shadow(
+        result.shadow_model,
+        latency_ms=shadow.usage.completion_tokens * 10,
+        is_valid=True,
+        retried=False,
+    )
 ```
 
 ### Anthropic
@@ -90,6 +111,11 @@ router = Router(models={
 result = router.select()
 response = client.messages.create(model=result.model, ...)
 router.update(result.model, latency_ms=..., is_valid=..., retried=...)
+if result.shadow_model:
+    shadow = client.messages.create(model=result.shadow_model, ...)
+    router.update_shadow(
+        result.shadow_model, latency_ms=..., is_valid=..., retried=...
+    )
 ```
 
 ## Custom Reward Weights
@@ -173,8 +199,9 @@ streamlit run examples/04_streamlit_demo.py
 
 | Method | Description |
 |--------|-------------|
-| `select()` | Pick a model via Thompson Sampling → `RoutingResult` |
+| `select()` | Pick a primary model and optional shadow model → `RoutingResult` |
 | `update(model, *, latency_ms, is_valid, retried)` | Update Beta distribution → `RewardResult` |
+| `update_shadow(model, *, latency_ms, is_valid, retried)` | Update mirrored shadow telemetry → `RewardResult` |
 | `get_distributions()` | Current α/β/confidence for every model |
 | `get_stats()` | Summary statistics (JSON-serialisable) |
 
@@ -200,9 +227,13 @@ router = Router(
     reward_fn=CompositeReward(),# Reward function
     gamma=0.95,                 # Memory decay factor
     decay_interval=50,          # Apply decay every N queries
-    confidence_floor=0.50,      # Circuit breaker threshold
-    shadow_rate=0.10,           # Fraction of random exploration
-    fallback_model="gpt-4o",   # Circuit breaker fallback
+    confidence_floor=0.50,      # Safety floor before serving a model
+    shadow_rate=0.05,           # Fraction of mirrored shadow traffic
+    fallback_model="gpt-4o",    # Trusted model for fallback
+    circuit_window_size=5,      # Recent outcomes tracked per model
+    circuit_failure_threshold=3,# Failures needed to open a breaker
+    circuit_reset_queries=20,   # Cooldown before half-open probe
+    half_open_max_requests=2,   # Successful probes to close breaker
 )
 ```
 

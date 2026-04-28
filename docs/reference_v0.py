@@ -38,6 +38,13 @@ class ExecutionMetrics:
     tokens_used: int
     cost: float
 
+
+@dataclass
+class RoutingDecision:
+    """Primary and optional shadow model selected for one request."""
+    primary_model: str
+    shadow_model: Optional[str] = None
+
 @dataclass 
 class CacheEntry:
     """Cache entry with TTL and model version tracking for drift detection."""
@@ -76,7 +83,7 @@ class ThompsonRouter:
       4. Over time, better models get higher α → selected more often
     """
     
-    def __init__(self, models_config: Dict[str, Dict]):
+    def __init__(self, models_config: Dict[str, Dict], shadow_rate: float = 0.05):
         """
         Initialize with Expert Priors (not uniform Beta(1,1)).
         
@@ -86,8 +93,16 @@ class ThompsonRouter:
                 "haiku":   {"alpha": 5,  "beta": 5},  # Unknown, explore more
             }
         """
-        self.models = models_config
+        self.models = {
+            name: {
+                **stats,
+                "selections": stats.get("selections", 0),
+                "shadow_selections": stats.get("shadow_selections", 0),
+            }
+            for name, stats in models_config.items()
+        }
         self.gamma = 0.95  # Decay factor for Model Rot (applied every 100 queries)
+        self.shadow_rate = shadow_rate
         self.query_count = 0
 
     def select_model(self) -> str:
@@ -103,7 +118,38 @@ class ThompsonRouter:
             name: np.random.beta(stats["alpha"], stats["beta"])
             for name, stats in self.models.items()
         }
-        return max(samples, key=samples.get)
+        model = max(samples, key=samples.get)
+        self.models[model]["selections"] += 1
+        return model
+
+    def select_shadow_model(self, primary_model: str) -> Optional[str]:
+        """Select a hidden candidate model for mirrored evaluation."""
+        if self.shadow_rate <= 0 or random.random() >= self.shadow_rate:
+            return None
+
+        candidates = [name for name in self.models if name != primary_model]
+        if not candidates:
+            return None
+
+        shadow_model = min(
+            candidates,
+            key=lambda name: (
+                self.models[name]["shadow_selections"],
+                self.models[name]["selections"],
+                self.models[name]["alpha"] + self.models[name]["beta"],
+            ),
+        )
+        self.models[shadow_model]["shadow_selections"] += 1
+        return shadow_model
+
+    def select_with_shadow(self) -> RoutingDecision:
+        """Select the served model and optional mirrored shadow model."""
+        primary_model = self.select_model()
+        shadow_model = self.select_shadow_model(primary_model)
+        return RoutingDecision(
+            primary_model=primary_model,
+            shadow_model=shadow_model,
+        )
 
     def compute_reward(self, metrics: ExecutionMetrics) -> float:
         """
@@ -146,16 +192,29 @@ class ThompsonRouter:
           - If OpenAI updates a model and latency triples overnight,
             the router adapts within minutes, not days
         """
+        self._update_model(model_name, metrics, count_as_query=True)
+
+    def update_shadow(self, model_name: str, metrics: ExecutionMetrics):
+        """Learn from a hidden shadow request without increasing query count."""
+        self._update_model(model_name, metrics, count_as_query=False)
+
+    def _update_model(
+        self,
+        model_name: str,
+        metrics: ExecutionMetrics,
+        *,
+        count_as_query: bool,
+    ):
         reward = self.compute_reward(metrics)
-        
+
         # Proportional update: reward goes to α, (1-reward) goes to β
         self.models[model_name]["alpha"] += reward
         self.models[model_name]["beta"] += (1 - reward)
-        
-        # Apply decay every 100 queries
-        self.query_count += 1
-        if self.query_count % 100 == 0:
-            self._decay_memory()
+
+        if count_as_query:
+            self.query_count += 1
+            if self.query_count % 100 == 0:
+                self._decay_memory()
     
     def _decay_memory(self):
         """Apply decay to handle non-stationary model performance (Model Rot)."""
@@ -468,7 +527,7 @@ class UnifiedGateway:
             "gpt-4o":      {"alpha": 10, "beta": 1},   # High quality, low exploration
             "gpt-3.5":     {"alpha": 7,  "beta": 3},   # Good but variable
             "claude-haiku": {"alpha": 5,  "beta": 5},  # Unknown, explore more
-        })
+        }, shadow_rate=0.05)
         self.context_mgr = ReversibilityManager()
         
         # Telemetry
@@ -476,7 +535,10 @@ class UnifiedGateway:
             "cache_hits": 0,
             "cache_bypasses": 0,
             "total_queries": 0,
-            "model_usage": {}
+            "model_usage": {},
+            "shadow_requests": 0,
+            "shadow_model_usage": {},
+            "shadow_cost": 0.0,
         }
 
     def handle_request(self, query: str, history: List[Dict]) -> str:
@@ -504,9 +566,18 @@ class UnifiedGateway:
         # ─────────────────────────────────────────────────────────────
         # Gate 2: ROUTER (Accuracy Focus)
         # ─────────────────────────────────────────────────────────────
-        model = self.router.select_model()
+        decision = self.router.select_with_shadow()
+        model = decision.primary_model
+        shadow_model = decision.shadow_model
         self.stats["model_usage"][model] = self.stats["model_usage"].get(model, 0) + 1
-        print(f"🎯 Router selected: {model}")
+        if shadow_model:
+            self.stats["shadow_requests"] += 1
+            self.stats["shadow_model_usage"][shadow_model] = (
+                self.stats["shadow_model_usage"].get(shadow_model, 0) + 1
+            )
+            print(f"🎯 Router selected: {model} (shadow: {shadow_model})")
+        else:
+            print(f"🎯 Router selected: {model}")
         
         # ─────────────────────────────────────────────────────────────
         # Gate 3: CONTEXT MANAGER (Safety Focus)
@@ -540,6 +611,30 @@ class UnifiedGateway:
         
         reward = self.router.compute_reward(metrics)
         print(f"📊 Feedback: reward={reward:.2f}, latency={latency_ms:.0f}ms")
+
+        if shadow_model:
+            # In production, run this call in parallel/background and do not
+            # expose the result to the user.
+            shadow_start = time.time()
+            _shadow_response = f"[Simulated shadow response from {shadow_model}]"
+            shadow_latency_ms = (
+                (time.time() - shadow_start) * 1000 + random.uniform(800, 2000)
+            )
+            shadow_metrics = ExecutionMetrics(
+                model_name=shadow_model,
+                latency_ms=shadow_latency_ms,
+                is_valid=True,
+                retried=False,
+                tokens_used=token_count,
+                cost=self._estimate_cost(shadow_model, token_count),
+            )
+            self.router.update_shadow(shadow_model, shadow_metrics)
+            self.stats["shadow_cost"] += shadow_metrics.cost
+            shadow_reward = self.router.compute_reward(shadow_metrics)
+            print(
+                f"🕶️ Shadow feedback: model={shadow_model}, "
+                f"reward={shadow_reward:.2f}, latency={shadow_latency_ms:.0f}ms"
+            )
         
         return response
     
@@ -559,11 +654,19 @@ class UnifiedGateway:
             self.stats["cache_hits"] / self.stats["total_queries"] 
             if self.stats["total_queries"] > 0 else 0
         )
+        shadow_rate = (
+            self.stats["shadow_requests"] / self.stats["total_queries"]
+            if self.stats["total_queries"] > 0 else 0
+        )
         return {
             **self.stats,
             "cache_hit_rate": f"{hit_rate:.1%}",
+            "shadow_request_rate": f"{shadow_rate:.1%}",
             "router_state": {
-                name: f"α={s['alpha']:.1f}, β={s['beta']:.1f}"
+                name: (
+                    f"α={s['alpha']:.1f}, β={s['beta']:.1f}, "
+                    f"served={s['selections']}, shadow={s['shadow_selections']}"
+                )
                 for name, s in self.router.models.items()
             }
         }

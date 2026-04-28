@@ -1,3 +1,5 @@
+import random
+
 import numpy as np
 import pytest
 
@@ -13,7 +15,7 @@ def test_select_returns_valid_model():
 def test_update_increases_alpha():
     router = Router()
     before = router.get_distributions()["gpt-4o"].alpha
-    router.update("gpt-4o", latency_ms=500, is_valid=True, retried=False)
+    router.update("gpt-4o", latency_ms=500, validity_score=1.0, retry_count=0)
     after = router.get_distributions()["gpt-4o"].alpha
     assert after > before
 
@@ -21,7 +23,7 @@ def test_update_increases_alpha():
 def test_update_increases_beta_on_bad_response():
     router = Router()
     before = router.get_distributions()["gpt-4o"].beta
-    router.update("gpt-4o", latency_ms=9000, is_valid=False, retried=True)
+    router.update("gpt-4o", latency_ms=9000, validity_score=0.0, retry_count=1)
     after = router.get_distributions()["gpt-4o"].beta
     assert after > before
 
@@ -30,7 +32,9 @@ def test_decay_reduces_parameters():
     router = Router(decay_interval=3)
     for _ in range(3):
         result = router.select()
-        router.update(result.model, latency_ms=500, is_valid=True, retried=False)
+        router.update(
+            result.model, latency_ms=500, validity_score=1.0, retry_count=0
+        )
     # After decay, verify alpha is lower than raw accumulation would give
     for state in router.get_distributions().values():
         assert state.alpha >= 1.0
@@ -54,11 +58,75 @@ def test_circuit_breaker_redirects_low_confidence():
     assert good_count > 90
 
 
-def test_shadow_rate_explores():
+def test_shadow_rate_assigns_shadow_model():
     router = Router(shadow_rate=1.0)
     np.random.seed(0)
-    models_seen = {router.select().model for _ in range(50)}
-    assert len(models_seen) > 1
+    random.seed(0)
+    result = router.select()
+    assert result.shadow_model is not None
+    assert result.shadow_model != result.model
+    assert router.get_distributions()[result.shadow_model].shadow_selections == 1
+
+
+def test_update_shadow_does_not_increment_query_count():
+    router = Router(shadow_rate=1.0)
+    np.random.seed(0)
+    random.seed(0)
+
+    result = router.select()
+    router.update(result.model, latency_ms=500, validity_score=1.0, retry_count=0)
+    router.update_shadow(
+        result.shadow_model,
+        latency_ms=700,
+        validity_score=1.0,
+        retry_count=0,
+    )
+
+    stats = router.get_stats()
+    assert stats["total_queries"] == 1
+    assert stats["total_shadow_selections"] == 1
+
+
+def test_circuit_breaker_state_machine_uses_half_open_shadow_probe():
+    models = {
+        "good": ModelConfig(alpha=10, beta=1),
+        "cheap": ModelConfig(alpha=9, beta=1),
+    }
+    router = Router(
+        models=models,
+        fallback_model="good",
+        confidence_floor=0.0,
+        shadow_rate=0.0,
+        circuit_window_size=3,
+        circuit_failure_threshold=2,
+        circuit_reset_queries=2,
+        half_open_max_requests=2,
+    )
+
+    router.update("cheap", latency_ms=9000, validity_score=0.0, retry_count=1)
+    router.update("cheap", latency_ms=9000, validity_score=0.0, retry_count=1)
+    assert router.get_distributions()["cheap"].circuit_state == "open"
+
+    result = router.select()
+    assert result.model == "good"
+    assert result.selection_reason == "circuit_open"
+
+    router.update("good", latency_ms=500, validity_score=1.0, retry_count=0)
+    router.update("good", latency_ms=500, validity_score=1.0, retry_count=0)
+
+    result = router.select()
+    assert result.shadow_model == "cheap"
+    assert router.get_distributions()["cheap"].circuit_state == "half_open"
+
+    router.update_shadow(
+        "cheap", latency_ms=500, validity_score=1.0, retry_count=0
+    )
+    assert router.get_distributions()["cheap"].circuit_state == "half_open"
+
+    router.update_shadow(
+        "cheap", latency_ms=500, validity_score=1.0, retry_count=0
+    )
+    assert router.get_distributions()["cheap"].circuit_state == "closed"
 
 
 def test_custom_single_model():

@@ -20,9 +20,21 @@ def main():
         router.update(
             result.model,
             latency_ms=latency,
-            is_valid=True,
-            retried=False,
+            validity_score=1.0,
+            retry_count=0,
         )
+        if result.shadow_model:
+            shadow_latency = (
+                500
+                if "mini" in result.shadow_model or "haiku" in result.shadow_model
+                else 2000
+            )
+            router.update_shadow(
+                result.shadow_model,
+                latency_ms=shadow_latency,
+                validity_score=1.0,
+                retry_count=0,
+            )
 
         if (i + 1) % 10 == 0:
             share = router.get_stats()["model_share"]
