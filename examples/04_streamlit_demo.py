@@ -356,7 +356,7 @@ def _tab_cold():
     step = st.slider("Scrub timeline", 0, len(expert) - 1, len(expert) - 1, key="cs")
     l, r = st.columns(2)
     with l:
-        st.markdown("#### Expert Priors  β(8,3) / β(5,4)")
+        st.markdown("#### Expert Priors  β(8,3) / β(3,2)")
         st.plotly_chart(plot_beta_distributions(expert, step), use_container_width=True)
         st.plotly_chart(plot_traffic(expert, step), use_container_width=True)
     with r:

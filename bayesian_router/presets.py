@@ -4,8 +4,8 @@ from .types import ModelConfig
 
 EXPERT_PRIORS: dict[str, ModelConfig] = {
     "gpt-4o": ModelConfig(alpha=8, beta=3, cost_per_1k=0.005),
-    "gpt-4o-mini": ModelConfig(alpha=5, beta=4, cost_per_1k=0.00015),
-    "claude-haiku": ModelConfig(alpha=5, beta=4, cost_per_1k=0.00025),
+    "gpt-4o-mini": ModelConfig(alpha=3, beta=2, cost_per_1k=0.00015),
+    "claude-haiku": ModelConfig(alpha=3, beta=2, cost_per_1k=0.00025),
 }
 """Priors informed by public benchmarks — converge in ~20 queries."""
 

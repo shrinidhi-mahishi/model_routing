@@ -18,19 +18,19 @@ class SimulationProfile:
 DEFAULT_PROFILES: Dict[str, SimulationProfile] = {
     "gpt-4o": SimulationProfile(
         cost_per_1k=0.005,
-        base_validity=0.96,
-        latency_range=(1500, 3500),
-        retry_rate=0.04,
+        base_validity=0.83,
+        latency_range=(3000, 3500),
+        retry_rate=0.08,
     ),
     "gpt-4o-mini": SimulationProfile(
         cost_per_1k=0.00015,
-        base_validity=0.89,
-        latency_range=(400, 1200),
-        retry_rate=0.09,
+        base_validity=0.75,
+        latency_range=(800, 1200),
+        retry_rate=0.5,
     ),
     "claude-haiku": SimulationProfile(
         cost_per_1k=0.00025,
-        base_validity=0.91,
+        base_validity=0.81,
         latency_range=(300, 900),
         retry_rate=0.07,
     ),
