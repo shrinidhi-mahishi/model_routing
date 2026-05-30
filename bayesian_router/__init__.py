@@ -9,7 +9,7 @@ from .router import Router
 from .simulator import DEFAULT_PROFILES, ModelSimulator, SimulationProfile
 from .types import ModelConfig, ModelState, RewardResult, RoutingResult
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 __all__ = [
     "Router",
     "CompositeReward",

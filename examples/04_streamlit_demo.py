@@ -20,9 +20,25 @@ from bayesian_router import (
     DEFAULT_PROFILES,
     EXPERT_PRIORS,
     UNIFORM_PRIORS,
+    CompositeReward,
+    ModelConfig,
     ModelSimulator,
     Router,
 )
+
+# Stronger expert priors for the cold-start tab — matches notebook Part 5.
+COLD_START_EXPERT = {
+    "gpt-4o":       ModelConfig(alpha=25, beta=2, cost_per_1k=0.005),
+    "gpt-4o-mini":  ModelConfig(alpha=4,  beta=2, cost_per_1k=0.00015),
+    "claude-haiku": ModelConfig(alpha=4,  beta=2, cost_per_1k=0.00025),
+}
+
+# Stronger priors for model-rot tab — matches notebook Part 6.
+ROT_PRIORS = {
+    "gpt-4o":       ModelConfig(alpha=20, beta=5, cost_per_1k=0.005),
+    "gpt-4o-mini":  ModelConfig(alpha=5,  beta=5, cost_per_1k=0.00015),
+    "claude-haiku": ModelConfig(alpha=5,  beta=5, cost_per_1k=0.00025),
+}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DISPLAY CONSTANTS (colours / labels for charts — not part of the package)
@@ -83,11 +99,21 @@ def run_simulation(
     gamma: float = 0.95,
     decay_interval: int = 50,
     seed: int = 42,
+    reward_fn=None,
+    shadow_rate: float = 0.05,
+    confidence_floor: float = 0.50,
 ) -> List[StepRecord]:
     np.random.seed(seed)
     random.seed(seed)
 
-    router = Router(models=priors, gamma=gamma, decay_interval=decay_interval)
+    router = Router(
+        models=priors,
+        gamma=gamma,
+        decay_interval=decay_interval,
+        reward_fn=reward_fn,
+        shadow_rate=shadow_rate,
+        confidence_floor=confidence_floor,
+    )
     sim = ModelSimulator()
     baseline_rate = DEFAULT_PROFILES["gpt-4o"].cost_per_1k
     history: List[StepRecord] = []
@@ -242,13 +268,13 @@ def plot_rewards(history, step, window=30):
     qs = [r.query_id + 1 for r in records]
     fig = go.Figure()
     fig.add_trace(
-        go.Bar(x=qs, y=[r.validity_r for r in records], name="Validity (50%)", marker_color="#10B981")
+        go.Bar(x=qs, y=[r.validity_r for r in records], name="Validity", marker_color="#10B981")
     )
     fig.add_trace(
-        go.Bar(x=qs, y=[r.latency_r for r in records], name="Latency (30%)", marker_color="#3B82F6")
+        go.Bar(x=qs, y=[r.latency_r for r in records], name="Latency", marker_color="#3B82F6")
     )
     fig.add_trace(
-        go.Bar(x=qs, y=[r.retry_r for r in records], name="No-Retry (20%)", marker_color="#F59E0B")
+        go.Bar(x=qs, y=[r.retry_r for r in records], name="No-Retry", marker_color="#F59E0B")
     )
     fig.update_layout(
         title="Composite Reward Breakdown  (last 30 queries)",
@@ -304,15 +330,18 @@ def _tab_rot():
     st.markdown("### When a provider degrades, the router reroutes automatically")
     st.markdown(
         "**Decaying memory** makes recent observations weigh more than history. "
-        "The router detects quality shifts within minutes — zero human intervention."
+        "The router detects quality shifts within minutes — zero human intervention.\n\n"
+        "Uses a **quality-first reward** (validity=90%) so drift in quality is clearly visible."
     )
+    rot_reward = CompositeReward(validity_weight=0.90, latency_weight=0.05, retry_weight=0.05)
     c1, c2, c3 = st.columns(3)
-    rot_m = c1.selectbox("Degrade model", ["gpt-4o-mini", "claude-haiku", "gpt-4o"], key="rm")
-    rot_at = c2.slider("Degrade at query #", 30, 200, 75, 5, key="ra")
-    rot_f = c3.slider("Degradation factor", 1.5, 5.0, 2.5, 0.5, key="rf")
+    rot_m = c1.selectbox("Degrade model", ["gpt-4o", "gpt-4o-mini", "claude-haiku"], key="rm")
+    rot_at = c2.slider("Degrade at query #", 50, 300, 150, 10, key="ra")
+    rot_f = c3.slider("Degradation factor", 1.5, 5.0, 3.0, 0.5, key="rf")
     if st.button("Run Rot Scenario", key="rb", type="primary"):
         st.session_state["rh"] = run_simulation(
-            300, EXPERT_PRIORS, rot_config={"model": rot_m, "at_query": rot_at, "factor": rot_f}
+            400, ROT_PRIORS, rot_config={"model": rot_m, "at_query": rot_at, "factor": rot_f},
+            gamma=0.90, reward_fn=rot_reward, shadow_rate=0.10, confidence_floor=0.0,
         )
         st.session_state["rot_at"] = rot_at
         st.session_state["rot_m"] = rot_m
@@ -344,11 +373,20 @@ def _tab_cold():
     st.markdown(
         "Starting with **informative priors** from benchmark data means "
         "the router makes good decisions from query 1 instead of burning "
-        "budget on random exploration."
+        "budget on random exploration.\n\n"
+        "Uses a **quality-first reward** (validity=100%) so the stronger model "
+        "is genuinely the best early choice."
     )
+    cold_reward = CompositeReward(validity_weight=1.0, latency_weight=0.0, retry_weight=0.0)
     if st.button("Run Comparison", key="cb", type="primary"):
-        st.session_state["ce"] = run_simulation(200, EXPERT_PRIORS, seed=42)
-        st.session_state["cu"] = run_simulation(200, UNIFORM_PRIORS, seed=42)
+        st.session_state["ce"] = run_simulation(
+            50, COLD_START_EXPERT, seed=17, reward_fn=cold_reward,
+            confidence_floor=0.0, shadow_rate=0.0,
+        )
+        st.session_state["cu"] = run_simulation(
+            50, UNIFORM_PRIORS, seed=17, reward_fn=cold_reward,
+            confidence_floor=0.0, shadow_rate=0.0,
+        )
     if "ce" not in st.session_state:
         st.info("Press **Run Comparison** to start.")
         return
@@ -356,7 +394,7 @@ def _tab_cold():
     step = st.slider("Scrub timeline", 0, len(expert) - 1, len(expert) - 1, key="cs")
     l, r = st.columns(2)
     with l:
-        st.markdown("#### Expert Priors  β(8,3) / β(3,2)")
+        st.markdown("#### Expert Priors  β(25,2) / β(4,2)")
         st.plotly_chart(plot_beta_distributions(expert, step), use_container_width=True)
         st.plotly_chart(plot_traffic(expert, step), use_container_width=True)
     with r:
@@ -416,11 +454,14 @@ def _sidebar():
     with st.sidebar.expander("Composite Reward"):
         st.markdown(
             "Three signals from normal agent telemetry:\n\n"
-            "| Signal | Weight | Source |\n"
-            "|--------|--------|--------|\n"
-            "| Validity | 50% | Pydantic / JSON schema |\n"
-            "| Latency | 30% | Wall-clock time |\n"
-            "| No retry | 20% | Agent self-correction |\n\n"
+            "| Signal | Default | Quality-first | Source |\n"
+            "|--------|---------|---------------|--------|\n"
+            "| Validity | 50% | 70–100% | Pydantic / JSON schema |\n"
+            "| Latency | 30% | 0–15% | Wall-clock time |\n"
+            "| No retry | 20% | 0–15% | Agent self-correction |\n\n"
+            "Weights are tunable per use case. "
+            "The **Cold Start** and **Model Rot** tabs use quality-first weights "
+            "so the stronger model is the correct early choice.\n\n"
             "**Zero human labels needed.**"
         )
     with st.sidebar.expander("Decaying Memory"):

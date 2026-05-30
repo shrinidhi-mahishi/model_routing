@@ -20,7 +20,7 @@ DEFAULT_PROFILES: Dict[str, SimulationProfile] = {
         cost_per_1k=0.005,
         base_validity=0.83,
         latency_range=(3000, 3500),
-        retry_rate=0.08,
+        retry_rate=0.0,
     ),
     "gpt-4o-mini": SimulationProfile(
         cost_per_1k=0.00015,

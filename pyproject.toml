@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bayesian-router"
-version = "0.1.0"
+version = "0.1.1"
 description = "Autonomous LLM model routing with Thompson Sampling — cut API costs 40-70 % with <1 % accuracy drop"
 readme = "README.md"
 license = "MIT"
