@@ -21,6 +21,30 @@ For each question, there are usually two useful layers:
 - `If they push` = the more precise or technical follow-up
 
 ## Most Likely Questions
+### 0. how do beta distribution get narrower after adding more evidences
+A Beta belief gets narrower because each new observation increases its effective sample size.
+
+If your prior is Beta(alpha, beta) and you observe:
+
+success: alpha <- alpha + 1
+failure: beta <- beta + 1
+then uncertainty is controlled by alpha + beta (total evidence).
+
+For Beta:
+
+Mean: alpha / (alpha + beta)
+Variance: alpha*beta / [ (alpha+beta)^2 * (alpha+beta+1) ]
+As alpha + beta grows, that denominator grows fast, so variance shrinks → the curve becomes tighter (narrower) around the mean.
+
+Example:
+
+Beta(1,1) (no evidence): very wide/flat
+after 100 observations with ~70% success: Beta(71,31) → much narrower around ~0.70
+In your router terms:
+
+more telemetry updates (validity/reward evidence) = more concentrated belief
+if you apply decay (gamma < 1), old evidence is discounted, effective alpha+beta drops, and beliefs widen again so the router can re-explore.
+
 
 ### 1. What problem are you actually solving?
 **Short answer:**  
